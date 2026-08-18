@@ -21,14 +21,27 @@ use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
-/// IPTC digital-source-type suffixes that indicate AI involvement, mapped to a plain
-/// description. Matching is on the exact code after the final '/'.
+/// IPTC digital-source-type suffixes that are *normatively* Generative AI per C2PA
+/// §18.15.4.5, mapped to a plain description. Matching is on the exact code after the final
+/// '/'. Only these three flip the AI verdict.
 pub fn ai_source_meaning(code: &str) -> Option<&'static str> {
     match code.to_ascii_lowercase().as_str() {
         "trainedalgorithmicmedia" => Some("fully AI-generated (trained algorithmic media)"),
         "compositewithtrainedalgorithmicmedia" => Some("AI-assisted / composite with AI media"),
         "compositesynthetic" => Some("composite with at least one AI-generated element"),
-        "algorithmicmedia" => Some("algorithmically generated media"),
+        _ => None,
+    }
+}
+
+/// IPTC digital-source-type suffixes that are algorithmic but NOT trained/generative AI (e.g.
+/// fractal or formula-based art, or a minor algorithmic correction). Recognized and surfaced,
+/// but deliberately does not flip the AI verdict.
+fn algorithmic_source_meaning(code: &str) -> Option<&'static str> {
+    match code.to_ascii_lowercase().as_str() {
+        "algorithmicmedia" => Some("algorithmic media (formula-based, not trained AI)"),
+        "algorithmicallyenhanced" => {
+            Some("algorithmically enhanced (minor correction, not trained AI)")
+        }
         _ => None,
     }
 }
@@ -56,6 +69,26 @@ fn soft_binding_label(alg: &str) -> String {
         return format!("{alg} (C2PA-registered soft binding)");
     };
     format!("{vendor} ({alg})")
+}
+
+/// Inspect an actions assertion for a `c2pa.watermarked{,.bound,.unbound}` action (C2PA 2.2+),
+/// returning a readable label for the declared watermark. `bound` watermarks back a soft-binding
+/// lookup; `unbound` ones are a vendor mark with no recovery, which we note explicitly.
+fn watermarked_action_label(assertion: &Value) -> Option<String> {
+    let actions = assertion.get("data")?.get("actions")?.as_array()?;
+    for act in actions {
+        let name = act.get("action").and_then(|s| s.as_str()).unwrap_or("");
+        match name {
+            "c2pa.watermarked.unbound" => {
+                return Some("declared watermark (unbound, no manifest lookup)".to_string())
+            }
+            "c2pa.watermarked" | "c2pa.watermarked.bound" => {
+                return Some("declared soft-binding watermark".to_string())
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Real, publicly-hosted C2PA-signed sample files from the official Content Authenticity
@@ -90,6 +123,10 @@ pub struct C2paReport {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_source_type: Option<String>,
+    /// An algorithmic-but-not-generative-AI digitalSourceType (e.g. fractal/formula art). Shown
+    /// for transparency; does NOT set the AI verdict.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithmic_source: Option<String>,
     pub synthid_assertion: bool,
     /// Forensic soft-binding watermark named in the manifest (e.g. `com.adobe.trustmark.Q`,
     /// Digimarc, Imatag). Present only when the signed manifest declares one.
@@ -179,6 +216,9 @@ struct AiMarkers {
     source_type: Option<String>,
     synthid_assertion: bool,
     soft_binding: Option<String>,
+    /// An algorithmic-but-not-AI digitalSourceType (recognized for transparency; does not
+    /// contribute to `is_ai`).
+    algorithmic_source: Option<String>,
 }
 
 impl AiMarkers {
@@ -188,6 +228,7 @@ impl AiMarkers {
         self.synthid_assertion |= other.synthid_assertion;
         self.source_type = self.source_type.take().or(other.source_type);
         self.soft_binding = self.soft_binding.take().or(other.soft_binding);
+        self.algorithmic_source = self.algorithmic_source.take().or(other.algorithmic_source);
     }
 
     /// Whether this manifest declares AI generation (source type or SynthID assertion).
@@ -219,6 +260,14 @@ fn find_ai_markers(active: &Value) -> AiMarkers {
                 .map(soft_binding_label)
                 .or_else(|| Some("soft-binding watermark".to_string()));
         }
+        // A `c2pa.watermarked.bound/unbound` action (inside an actions assertion) declares an
+        // inserted watermark even when no separate soft-binding assertion names the algorithm -
+        // notably the `unbound` case, which carries a vendor mark with no recovery lookup.
+        if label.contains("actions") {
+            if let Some(w) = watermarked_action_label(a) {
+                markers.soft_binding.get_or_insert(w);
+            }
+        }
         let mut dsts = Vec::new();
         if let Some(data) = a.get("data") {
             collect_dst(data, &mut dsts);
@@ -227,6 +276,8 @@ fn find_ai_markers(active: &Value) -> AiMarkers {
             let code = dst.rsplit('/').next().unwrap_or(&dst);
             if let Some(meaning) = ai_source_meaning(code) {
                 markers.source_type = Some(meaning.to_string());
+            } else if let Some(meaning) = algorithmic_source_meaning(code) {
+                markers.algorithmic_source = Some(meaning.to_string());
             }
         }
     }
@@ -279,6 +330,7 @@ pub fn check_file(path: &str, trust_anchors: Option<&str>) -> C2paReport {
         claim_generator: None,
         title: None,
         ai_source_type: None,
+        algorithmic_source: None,
         synthid_assertion: false,
         soft_binding: None,
         implied_synthid: false,
@@ -384,6 +436,7 @@ pub fn check_file(path: &str, trust_anchors: Option<&str>) -> C2paReport {
     let markers = find_ai_markers_in_store(&store, &active);
     report.provenance_conflict = markers.is_ai() && !active_is_ai;
     report.ai_source_type = markers.source_type;
+    report.algorithmic_source = markers.algorithmic_source;
     report.synthid_assertion = markers.synthid_assertion;
     report.soft_binding = markers.soft_binding;
 
@@ -536,9 +589,18 @@ mod tests {
         assert!(ai_source_meaning("trainedAlgorithmicMedia").is_some());
         assert!(ai_source_meaning("compositeWithTrainedAlgorithmicMedia").is_some());
         assert!(ai_source_meaning("compositeSynthetic").is_some());
-        // Camera capture and unknown codes are not AI markers.
+        // Pure algorithmic art and camera capture are not generative-AI markers.
+        assert!(ai_source_meaning("algorithmicMedia").is_none());
         assert!(ai_source_meaning("digitalCapture").is_none());
         assert!(ai_source_meaning("something-else").is_none());
+    }
+
+    #[test]
+    fn algorithmic_source_is_recognized_but_not_ai() {
+        // Recognized for transparency, but must not appear in the AI mapping.
+        assert!(algorithmic_source_meaning("algorithmicMedia").is_some());
+        assert!(algorithmic_source_meaning("algorithmicallyEnhanced").is_some());
+        assert!(ai_source_meaning("algorithmicMedia").is_none());
     }
 
     #[test]
@@ -561,6 +623,21 @@ mod tests {
         assert!(soft_binding_label("com.aiwatermark.audioseal.1").starts_with("Meta Seal"));
         // Unregistered-but-well-formed ids fall back to naming themselves, not a crash.
         assert!(soft_binding_label("io.example.newmark.1").contains("C2PA-registered"));
+    }
+
+    #[test]
+    fn watermarked_action_is_detected_from_actions_assertion() {
+        let manifest = json!({
+            "assertions": [
+                {"label": "c2pa.actions.v2", "data": {"actions": [
+                    {"action": "c2pa.watermarked.unbound"}
+                ]}}
+            ]
+        });
+        let m = find_ai_markers(&manifest);
+        assert!(m.soft_binding.as_deref().unwrap().contains("unbound"));
+        // An unbound watermark is not, by itself, an AI-generation claim.
+        assert!(!m.is_ai());
     }
 
     #[test]
@@ -635,6 +712,7 @@ mod tests {
             claim_generator: None,
             title: None,
             ai_source_type: None,
+            algorithmic_source: None,
             synthid_assertion: false,
             soft_binding: None,
             implied_synthid: false,

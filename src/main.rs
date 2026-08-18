@@ -398,6 +398,9 @@ fn run_check(args: CheckArgs) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ai) = &r.ai_source_type {
             println!("  AI marker:       {ai}  <-- flagged AI-generated");
         }
+        if let Some(alg) = &r.algorithmic_source {
+            println!("  source type:     {alg}  (algorithmic, not flagged as AI)");
+        }
         if r.synthid_assertion {
             println!("  SynthID:         SynthID provenance assertion present (Google marker)");
         }

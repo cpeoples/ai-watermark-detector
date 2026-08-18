@@ -19,13 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic and dependency-light.
 - `check` now reports two more details from the signed manifest: the forensic `soft-binding`
   watermark it declares, named from the C2PA Soft Binding Algorithm List (Adobe TrustMark,
-  Digimarc, IMATAG, Meta Seal, NexGuard, or the raw registered id), and an implied SynthID pixel
-  watermark when a valid signature comes from a vendor that always pairs C2PA with SynthID
-  (Google, OpenAI).
+  Digimarc, IMATAG, Meta Seal, NexGuard, or the raw registered id), also picked up from a
+  `c2pa.watermarked.bound`/`.unbound` action, and an implied SynthID pixel watermark when a
+  valid signature comes from a vendor that always pairs C2PA with SynthID (Google, OpenAI).
   AI markers are collected across the whole manifest chain, so a marker on a parent/ingredient
   manifest (not just the active one) is detected, and a clean active manifest over an AI
   ingredient is surfaced as a provenance conflict. Recognizes the `compositeSynthetic`
-  digital-source-type in addition to the trained/composite AI types.
+  digital-source-type in addition to the trained/composite AI types. Only the three normatively
+  generative-AI `digitalSourceType` values flip the AI verdict; `algorithmicMedia` and
+  `algorithmicallyEnhanced` are recognized and shown as algorithmic (not AI).
 - `--format text|json|xml|yaml` on `score`, `check`, and `scan` for machine-readable output
   (all serialized through `serde`; `--json` kept as a shortcut for `--format json`).
 - `check`/`scan` now accept `http(s)://` URLs: a remote file is downloaded and its C2PA

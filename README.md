@@ -346,8 +346,8 @@ The `score` result carries `scheme`, `tokens`, `positions`, `usable_positions`,
 `green_or_ones`, `total`, `mean_g`, `weighted_mean_g` (SynthID only), `grounded_p_value`
 (schemes with a closed-form null), `z`, `approx_p_value`, `reliable`, `screen_positive`, and
 a `warning`. `check`/`scan` emit a `results` list of per-file `verdict`, `has_manifest`,
-`ai_source_type`, `synthid_assertion`, `assertions`, `status`, and `signals` (each with
-`confidence`, `source`, `detail`, and an optional `tool`).
+`ai_source_type`, `algorithmic_source`, `synthid_assertion`, `assertions`, `status`, and
+`signals` (each with `confidence`, `source`, `detail`, and an optional `tool`).
 
 ## Scoring a token sequence
 
