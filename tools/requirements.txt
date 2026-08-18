@@ -1,0 +1,24 @@
+# Contributor-only Python dependencies. None of these are needed to run the shipped
+# Rust CLI (`score` / `check` / `scan`); they only power the validation and analysis
+# tools under tools/. Install into a virtualenv:
+#
+#   python3 -m venv .venv && . .venv/bin/activate && pip install -r tools/requirements.txt
+#
+# If you only need one tool, the packages it uses are grouped below.
+
+# Text validation battery + attack/robustness + power/ROC analysis
+#   (validate.py, attacks.py, power_analysis.py): diffs our detector against the
+#   official Hugging Face WatermarkDetector.
+transformers>=4.44
+torch>=2.2
+numpy>=1.24
+scipy>=1.11
+
+# Pixel-domain image watermarks (image_watermark.py): Stable Signature extractor.
+torchvision>=0.17
+Pillow>=10.0
+
+# Text -> token-ID bridge (tokenize_text.py): pick whichever tokenizer matches the
+# model that generated your text.
+tiktoken>=0.7
+tokenizers>=0.19

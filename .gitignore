@@ -1,0 +1,10 @@
+/target
+/corpus
+/.venv
+__pycache__/
+*.py[cod]
+.DS_Store
+/samples/
+*.pem
+.idea/
+.vscode/
