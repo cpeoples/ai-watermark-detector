@@ -4,15 +4,15 @@
 This implements the validation experiment:
 
     corpus/
-      claude/                *.txt   (raw Claude output)
-      claude-copy-paste/     *.txt   (Claude output copied & pasted)
-      claude-minor-edits/    *.txt
-      claude-heavy-edits/    *.txt
-      claude-gpt-rewrite/    *.txt
-      claude-human-rewrite/  *.txt
-      human/                 *.txt
-      gpt/                   *.txt
-      gemini/                *.txt
+      watermarked/               *.txt   (watermarked under the chosen scheme)
+      watermarked-copy-paste/    *.txt   (identical copy)
+      watermarked-minor-edits/   *.txt   (~5% tokens changed)
+      watermarked-heavy-edits/   *.txt   (~30% tokens changed)
+      watermarked-rewrite/       *.txt   (~70% tokens changed)
+      other-scheme-watermark/    *.txt   (watermarked under the other family)
+      human/                     *.txt   (unwatermarked baseline)
+      gpt/                       *.txt   (unwatermarked baseline)
+      gemini/                    *.txt   (unwatermarked baseline)
 
 For each sample it: tokenizes -> runs the Rust detector -> collects the z-score.
 It then prints per-category summary statistics (n, mean/median/min/max z, mean p).
@@ -182,7 +182,7 @@ def main() -> None:
     print("-" * 84)
     print("rel = samples clearing the ~100-token reliability floor.")
     print("Higher mean_z / lower mean_p => stronger apparent watermark signal.")
-    print("Expect (controlled experiment): claude >> other-scheme-watermark ~ human/gpt/gemini,")
+    print("Expect (controlled experiment): watermarked >> other-scheme-watermark ~ human/gpt/gemini,")
     print("with signal degrading across copy-paste < minor-edits < heavy-edits < rewrite.")
 
 

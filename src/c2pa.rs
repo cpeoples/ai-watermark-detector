@@ -27,9 +27,35 @@ pub fn ai_source_meaning(code: &str) -> Option<&'static str> {
     match code.to_ascii_lowercase().as_str() {
         "trainedalgorithmicmedia" => Some("fully AI-generated (trained algorithmic media)"),
         "compositewithtrainedalgorithmicmedia" => Some("AI-assisted / composite with AI media"),
+        "compositesynthetic" => Some("composite with at least one AI-generated element"),
         "algorithmicmedia" => Some("algorithmically generated media"),
         _ => None,
     }
+}
+
+/// Turn a C2PA soft-binding `alg` identifier (from the C2PA Soft Binding Algorithm List, which
+/// uses reverse-DNS names like `com.adobe.trustmark.Q`) into a readable vendor label. Known
+/// vendors are named explicitly; anything else keeps the raw identifier and notes that it is a
+/// registered algorithm, so new registry entries still read sensibly without hardcoding them.
+fn soft_binding_label(alg: &str) -> String {
+    let lower = alg.to_ascii_lowercase();
+    let vendor = if lower.contains("trustmark") {
+        "Adobe TrustMark"
+    } else if lower.contains("digimarc") {
+        "Digimarc"
+    } else if lower.contains("imatag") {
+        "IMATAG"
+    } else if lower.contains("audioseal")
+        || lower.contains("videoseal")
+        || lower.contains("pixelseal")
+    {
+        "Meta Seal"
+    } else if lower.contains("nexguard") {
+        "NAGRA NexGuard"
+    } else {
+        return format!("{alg} (C2PA-registered soft binding)");
+    };
+    format!("{vendor} ({alg})")
 }
 
 /// Real, publicly-hosted C2PA-signed sample files from the official Content Authenticity
@@ -190,7 +216,7 @@ fn find_ai_markers(active: &Value) -> AiMarkers {
                 .get("data")
                 .and_then(|d| d.get("alg"))
                 .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
+                .map(soft_binding_label)
                 .or_else(|| Some("soft-binding watermark".to_string()));
         }
         let mut dsts = Vec::new();
@@ -226,6 +252,9 @@ fn find_ai_markers_in_store(store: &Value, active: &Value) -> AiMarkers {
 
 /// Vendors whose validly signed C2PA manifests always carry a SynthID pixel watermark, so a
 /// good signature from one implies the invisible watermark even absent a SynthID assertion.
+/// Note: only pixel-SynthID vendors belong here. Anthropic/Claude and Adobe/Microsoft sign
+/// C2PA as provenance only (Claude uses a SynthID-*Text* token watermark, not a pixel one), so
+/// they must not be added.
 fn issuer_implies_synthid(claim_generator: Option<&str>) -> bool {
     let Some(gen) = claim_generator else {
         return false;
@@ -503,6 +532,16 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn ai_source_meaning_covers_genai_types() {
+        assert!(ai_source_meaning("trainedAlgorithmicMedia").is_some());
+        assert!(ai_source_meaning("compositeWithTrainedAlgorithmicMedia").is_some());
+        assert!(ai_source_meaning("compositeSynthetic").is_some());
+        // Camera capture and unknown codes are not AI markers.
+        assert!(ai_source_meaning("digitalCapture").is_none());
+        assert!(ai_source_meaning("something-else").is_none());
+    }
+
+    #[test]
     fn soft_binding_alg_is_extracted() {
         let manifest = json!({
             "assertions": [
@@ -512,8 +551,16 @@ mod tests {
         let markers = find_ai_markers(&manifest);
         assert_eq!(
             markers.soft_binding.as_deref(),
-            Some("com.adobe.trustmark.Q")
+            Some("Adobe TrustMark (com.adobe.trustmark.Q)")
         );
+    }
+
+    #[test]
+    fn soft_binding_label_names_known_and_unknown_vendors() {
+        assert!(soft_binding_label("com.digimarc.validate.1").starts_with("Digimarc"));
+        assert!(soft_binding_label("com.aiwatermark.audioseal.1").starts_with("Meta Seal"));
+        // Unregistered-but-well-formed ids fall back to naming themselves, not a crash.
+        assert!(soft_binding_label("io.example.newmark.1").contains("C2PA-registered"));
     }
 
     #[test]
@@ -572,6 +619,8 @@ mod tests {
         assert!(issuer_implies_synthid(Some("Made by Google Gemini")));
         assert!(issuer_implies_synthid(Some("OpenAI DALL-E 3")));
         assert!(!issuer_implies_synthid(Some("Adobe Firefly")));
+        // Claude signs C2PA as provenance only (SynthID-Text, not a pixel watermark).
+        assert!(!issuer_implies_synthid(Some("Claude by Anthropic")));
         assert!(!issuer_implies_synthid(None));
     }
 

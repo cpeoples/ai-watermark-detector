@@ -66,7 +66,7 @@ struct ScoreArgs {
     #[arg(long)]
     config: String,
 
-    /// Watermark family: `synthid` (Gemini-style) or `kgw` (Claude-style green-list).
+    /// Watermark family: `synthid` (Gemini-style) or `kgw` (Kirchenbauer green-list).
     #[arg(long, default_value = "synthid")]
     scheme: String,
 
@@ -281,7 +281,9 @@ fn run_score(args: ScoreArgs) -> Result<(), Box<dyn std::error::Error>> {
             "answer only when the watermark scheme, config/keys, and tokenizer match the text that"
         );
         println!("was generated. It cannot detect a vendor's production text without that vendor's secret");
-        println!("key. A result for one scheme (e.g. KGW/Claude) says nothing about another (SynthID/Gemini).");
+        println!(
+            "key. A result for one scheme (e.g. KGW) says nothing about another (SynthID/Gemini)."
+        );
     }
 
     Ok(())

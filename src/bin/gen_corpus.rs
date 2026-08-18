@@ -1,13 +1,13 @@
 //! Controlled-corpus generator for validating the all-in-one detector.
 //!
 //! Emits token-id streams (as text files) using KNOWN watermark keys for BOTH schemes
-//! (`kgw` = Claude-style green-list, `synthid` = Gemini-style), plus unwatermarked
+//! (`kgw` = Kirchenbauer green-list, `synthid` = Gemini-style), plus unwatermarked
 //! baselines. This lets the harness confirm each detector recovers its own signal,
 //! observe degradation under simulated copy-paste / edits / rewrites, and verify that
 //! detectors do NOT cross schemes. These are research fixtures, NOT real model output.
 //!
 //! Usage: gen_corpus [OUT_DIR] [SCHEME]
-//!   SCHEME = kgw | synthid   (default: kgw, the Claude-as-described family)
+//!   SCHEME = kgw | synthid   (default: kgw)
 
 use ai_watermark_detector::{generate, generate_control, Config, Scheme, XorShift64};
 use std::fs;
@@ -52,36 +52,40 @@ fn main() {
     let len = 1500usize;
     let per_cat = 12usize;
 
-    // Watermarked "claude" samples under the chosen scheme (strong tournament).
+    // Watermarked samples under the chosen scheme (strong tournament).
     let mut rng = XorShift64::new(0xC1A0DE);
     for i in 0..per_cat {
         let ids = generate(&cfg, scheme, vocab, len, 12, &mut rng);
-        write_ids(&root.join("claude"), &format!("sample_{i:02}.txt"), &ids);
+        write_ids(
+            &root.join("watermarked"),
+            &format!("sample_{i:02}.txt"),
+            &ids,
+        );
 
         // copy-paste: identical (watermark designed to survive this).
         write_ids(
-            &root.join("claude-copy-paste"),
+            &root.join("watermarked-copy-paste"),
             &format!("sample_{i:02}.txt"),
             &ids,
         );
         // minor edits: ~5% tokens changed.
         let minor = corrupt(&ids, 0.05, vocab, &mut rng);
         write_ids(
-            &root.join("claude-minor-edits"),
+            &root.join("watermarked-minor-edits"),
             &format!("sample_{i:02}.txt"),
             &minor,
         );
         // heavy edits: ~30% tokens changed.
         let heavy = corrupt(&ids, 0.30, vocab, &mut rng);
         write_ids(
-            &root.join("claude-heavy-edits"),
+            &root.join("watermarked-heavy-edits"),
             &format!("sample_{i:02}.txt"),
             &heavy,
         );
         // rewrite: ~70% tokens changed (approximates a full paraphrase).
         let rewrite = corrupt(&ids, 0.70, vocab, &mut rng);
         write_ids(
-            &root.join("claude-rewrite"),
+            &root.join("watermarked-rewrite"),
             &format!("sample_{i:02}.txt"),
             &rewrite,
         );
@@ -118,6 +122,6 @@ fn main() {
         root.display(),
         scheme.as_str()
     );
-    println!("Categories: claude, claude-copy-paste, claude-minor-edits, claude-heavy-edits, claude-rewrite, other-scheme-watermark, human, gpt, gemini");
+    println!("Categories: watermarked, watermarked-copy-paste, watermarked-minor-edits, watermarked-heavy-edits, watermarked-rewrite, other-scheme-watermark, human, gpt, gemini");
     println!("Score with: python3 tools/corpus_harness.py --corpus {} --config config.example.json --pretokenized --scheme {}", root.display(), scheme.as_str());
 }

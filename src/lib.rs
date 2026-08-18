@@ -54,7 +54,7 @@ impl Scheme {
     pub fn parse(s: &str) -> Result<Scheme, String> {
         match s.to_ascii_lowercase().as_str() {
             "synthid" | "synthid-text" | "gemini" => Ok(Scheme::SynthId),
-            "kgw" | "claude" | "greenlist" | "green-list" => Ok(Scheme::Kgw),
+            "kgw" | "kirchenbauer" | "greenlist" | "green-list" => Ok(Scheme::Kgw),
             "exp" | "exponential" | "gumbel" | "aaronson" => Ok(Scheme::Exp),
             "unigram" | "unigram-fixed" | "zhao" => Ok(Scheme::Unigram),
             "sweet" | "sweet-code" => Ok(Scheme::Sweet),

@@ -123,7 +123,7 @@ cargo build --release
 # 2. Make a tiny demo corpus watermarked with a KNOWN key, then score it
 ./target/release/gen_corpus /tmp/demo kgw
 ./target/release/ai-watermark-detector score \
-  --config config.example.json --scheme kgw --token-file /tmp/demo/claude/sample_00.txt
+  --config config.example.json --scheme kgw --token-file /tmp/demo/watermarked/sample_00.txt
 # -> WATERMARK SIGNAL FOUND
 
 # 3. Score an unwatermarked sample for contrast
@@ -355,7 +355,7 @@ The detector consumes **token IDs**, not words (see "Why token IDs?" below). Pic
 scheme with `--scheme`:
 
 ```bash
-# Claude-style green-list scheme
+# KGW green-list scheme (Kirchenbauer et al.)
 ./target/release/ai-watermark-detector score \
   --config config.example.json --scheme kgw --token-file tokens.txt
 
@@ -442,8 +442,9 @@ this metadata can be forged or stripped:
 
 - **PNG text chunks** (`parameters`, `prompt`) that Stable Diffusion / ComfyUI / A1111 embed.
 - **XMP / IPTC metadata** keys like `AISystemUsed` / `DigitalSourceType` (e.g. DALL-E, Firefly).
-- **Container tags** across MP4/MOV, MKV/WebM, AVI, FLV, and MP3 ID3 naming AI video/music
-  tools (Sora, Kling, Suno, ElevenLabs…), plus the China **TC260 `AIGC`** label.
+- **Container tags** across MP4/MOV, MKV/WebM, AVI, FLV, WAV/FLAC/OGG/AAC audio, and MP3 ID3
+  naming AI video/music tools (Sora, Kling, Suno, ElevenLabs…), plus the China **TC260 `AIGC`**
+  label.
 - **Filename patterns** (e.g. `ElevenLabs_…`, Midjourney/Suno prefixes) as a low-confidence hint.
 
 These never override a C2PA verdict; a signed manifest is always HIGH, metadata is MEDIUM, and
@@ -525,7 +526,7 @@ cross-scheme independence:
 ```bash
 cargo build --release
 
-# Claude-style (KGW) corpus + KGW detector
+# KGW green-list corpus + KGW detector
 ./target/release/gen_corpus corpus kgw
 python3 tools/corpus_harness.py --corpus corpus --config config.example.json --pretokenized --scheme kgw
 
@@ -538,11 +539,11 @@ Example output (KGW corpus, KGW detector, known key):
 
 ```text
 category                   n  rel   mean_z   med_z   max_z    mean_p  mean_tok
-claude                    12   12    69.22   69.31   69.91    0.0000      1500
-claude-copy-paste         12   12    69.22   69.31   69.91    0.0000      1500
-claude-minor-edits        12   12    53.66   53.56   57.20    0.0000      1500
-claude-heavy-edits        12   12    11.10   11.21   13.17    0.0000      1500
-claude-rewrite            12   12     0.15   -0.01    1.60    0.4689      1500
+watermarked               12   12    69.22   69.31   69.91    0.0000      1500
+watermarked-copy-paste    12   12    69.22   69.31   69.91    0.0000      1500
+watermarked-minor-edits   12   12    53.66   53.56   57.20    0.0000      1500
+watermarked-heavy-edits   12   12    11.10   11.21   13.17    0.0000      1500
+watermarked-rewrite       12   12     0.15   -0.01    1.60    0.4689      1500
 other-scheme-watermark    12   12     0.08   -0.15    1.64    0.4865      1500
 gpt                       12   12     0.12   -0.08    2.01    0.4801      1500
 gemini                    12   12    -0.13   -0.20    1.80    0.5470      1500
@@ -551,9 +552,9 @@ human                     12   12     0.02   -0.18    3.02    0.5320      1500
 
 Interpretation:
 
-- **`claude` / `claude-copy-paste`** - strong signal; survives copy/paste.
-- **edits** - signal degrades monotonically (minor → heavy).
-- **`claude-rewrite`** - heavy paraphrase washes the watermark out (baseline).
+- **`watermarked` / `watermarked-copy-paste`** - strong signal; survives copy/paste.
+- **edits** - signal degrades monotonically (minor -> heavy).
+- **`watermarked-rewrite`** - heavy paraphrase washes the watermark out (baseline).
 - **`other-scheme-watermark`** - watermarked under the *other* family; sits at baseline,
   proving detectors don't cross schemes.
 - **`gpt` / `gemini` / `human`** - unwatermarked baselines at the coin-flip line.

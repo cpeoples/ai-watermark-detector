@@ -45,6 +45,6 @@ python-setup: ## Create a venv and install the text-validation Python deps
 demo: build ## Build, generate a demo corpus, and score watermarked vs human
 	./target/release/gen_corpus /tmp/cwd-demo kgw
 	@echo "--- watermarked sample ---"
-	./target/release/$(BIN_NAME) score --config config.example.json --scheme kgw --token-file /tmp/cwd-demo/claude/sample_00.txt
+	./target/release/$(BIN_NAME) score --config config.example.json --scheme kgw --token-file /tmp/cwd-demo/watermarked/sample_00.txt
 	@echo "--- human sample ---"
 	./target/release/$(BIN_NAME) score --config config.example.json --scheme kgw --token-file /tmp/cwd-demo/human/sample_00.txt

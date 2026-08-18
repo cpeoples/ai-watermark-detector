@@ -5,8 +5,9 @@
 //! that can be edited or stripped - so they are deliberately reported at MEDIUM/LOW
 //! confidence and never override a C2PA forensic verdict. Everything is parsed natively from
 //! the file bytes (no external tools, no ML): PNG text chunks, embedded XMP/EXIF/IPTC
-//! strings, MP4/MKV/WebM/AVI/FLV container tags, the TC260 `AIGC` label, ID3 tags, embedded
-//! C2PA-in-text manifests (C2PA 2.4 A.7/A.8/A.9), and filename conventions.
+//! strings, MP4/MKV/WebM/AVI/FLV video and WAV/FLAC/OGG/AAC audio container tags, the TC260
+//! `AIGC` label, ID3 tags, embedded C2PA-in-text manifests (C2PA 2.4 A.7/A.8/A.9), and
+//! filename conventions.
 //!
 //! Deliberately out of scope (to stay a deterministic, dependency-light tool): visible-logo
 //! template matching and neural invisible-watermark decoders such as Adobe TrustMark, which
@@ -84,6 +85,8 @@ const TOOL_MARKERS: &[(&str, &str)] = &[
     ("gpt-image", "GPT Image"),
     ("chatgpt", "ChatGPT"),
     ("openai", "OpenAI"),
+    ("claude", "Claude"),
+    ("anthropic", "Claude"),
     ("sora", "Sora"),
     ("runway", "Runway"),
     ("pika", "Pika"),
@@ -94,6 +97,14 @@ const TOOL_MARKERS: &[(&str, &str)] = &[
     ("udio", "Udio"),
     ("elevenlabs", "ElevenLabs"),
     ("soundraw", "SoundRaw"),
+    ("image playground", "Apple Image Playground"),
+    ("microsoft designer", "Microsoft Designer"),
+    ("bing image creator", "Bing Image Creator"),
+    ("copilot", "Microsoft Copilot"),
+    ("canva", "Canva"),
+    ("recraft", "Recraft"),
+    ("qwen", "Qwen"),
+    ("seedream", "Seedream"),
 ];
 
 /// Return the canonical AI tool name if `haystack` (already lowercased by the caller) mentions
@@ -105,13 +116,20 @@ pub fn tool_from(haystack: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// Metadata keys whose presence alone indicates AI generation regardless of value.
+/// Metadata tokens whose presence indicates AI generation: either an AI-specific key name
+/// (`AISystemUsed`, `digitalSourceType`) or a normative IPTC `digitalSourceType` value such as
+/// `trainedAlgorithmicMedia`. Matched as a lowercased substring of the metadata text.
 const AI_METADATA_KEYS: &[&str] = &[
     "aisystemused",
     "aigenerated",
     "digitalsourcetype",
     "aipromptinformation",
     "genai",
+    // digitalSourceType values, not just the key: some files carry the value under a
+    // vendor-specific field name we don't track.
+    "trainedalgorithmicmedia",
+    "compositewithtrainedalgorithmicmedia",
+    "algorithmicmedia",
 ];
 
 /// Scan a file's raw bytes plus its name for AI-generation hints. `ext` is the lowercased
@@ -133,6 +151,7 @@ pub fn scan(path: &str, ext: &str, bytes: &[u8]) -> Vec<Signal> {
         "mp4" | "mov" | "m4a" | "m4v" => scan_bytes_for_tools(bytes, "mp4", &mut signals),
         "mkv" | "webm" | "avi" | "flv" => scan_bytes_for_tools(bytes, "container", &mut signals),
         "mp3" => scan_id3(bytes, &mut signals),
+        "wav" | "flac" | "ogg" | "aac" => scan_bytes_for_tools(bytes, "audio", &mut signals),
         _ => {}
     }
     // XMP/EXIF/IPTC text and the TC260 AIGC label can appear across many containers; scan the
@@ -461,6 +480,7 @@ mod tests {
             Some("Stable Diffusion")
         );
         assert_eq!(tool_from("elevenlabs_2025-01-01"), Some("ElevenLabs"));
+        assert_eq!(tool_from("generated with anthropic claude"), Some("Claude"));
         assert_eq!(tool_from("a normal photo"), None);
     }
 
@@ -477,6 +497,15 @@ mod tests {
                 .as_deref(),
             Some("Midjourney")
         );
+    }
+
+    #[test]
+    fn xmp_digitalsourcetype_value_is_flagged() {
+        // Midjourney/Firefly write the IPTC value even without an AI-named key we track.
+        let xmp = br#"x<x:xmpmeta><Iptc4xmpExt:DigitalSourceType>http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia</Iptc4xmpExt:DigitalSourceType></x:xmpmeta>y"#;
+        let mut out = Vec::new();
+        scan_embedded_text(xmp, &mut out);
+        assert!(out.iter().any(|s| s.source == "xmp"));
     }
 
     #[test]
@@ -597,6 +626,17 @@ mod tests {
         let mut out = Vec::new();
         scan_id3(&bytes, &mut out);
         assert!(out.iter().any(|s| s.tool.as_deref() == Some("Suno")));
+    }
+
+    #[test]
+    fn wav_riff_info_tool_is_flagged() {
+        // WAV with a RIFF INFO software tag naming an AI audio tool.
+        let mut wav = b"RIFF\x00\x00\x00\x00WAVELIST\x00\x00\x00\x00INFOISFT".to_vec();
+        wav.extend_from_slice(b"Suno");
+        let signals = scan("clip.wav", "wav", &wav);
+        assert!(signals
+            .iter()
+            .any(|s| s.source == "audio" && s.tool.as_deref() == Some("Suno")));
     }
 
     #[test]
