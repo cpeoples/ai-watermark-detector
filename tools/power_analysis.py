@@ -15,7 +15,7 @@ exported HF green-list oracle for KGW, or by the reference u-oracle for exp), so
 reflect the real detector, not a toy. Everything is authoritative because YOU hold the key.
 
 Output is a compact table plus optional JSON; with --plot it also writes PNGs (needs
-matplotlib). No claim is made about production vendor text — this measures the detector's
+matplotlib). No claim is made about production vendor text - this measures the detector's
 intrinsic statistical power on streams you watermark yourself.
 
 Usage

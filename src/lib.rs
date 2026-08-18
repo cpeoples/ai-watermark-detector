@@ -2,13 +2,13 @@
 //!
 //! This is a *research reproduction* of two published logit-biasing text-watermark
 //! families:
-//!   * `synthid` — the SynthID-Text g-value / tournament mechanism (used by Gemini).
-//!   * `kgw` — the Kirchenbauer-Geiping-Wen-Katz-Miers-Goldstein (2023) green-list
+//!   * `synthid` - the SynthID-Text g-value / tournament mechanism (used by Gemini).
+//!   * `kgw` - the Kirchenbauer-Geiping-Wen-Katz-Miers-Goldstein (2023) green-list
 //!     mechanism (the category Anthropic's public description of Claude matches).
 //!
 //! These do NOT constitute an authoritative verifier for any production model.
 //! Authoritative detection requires the originating vendor's private key, exact
-//! tokenizer, and sampling configuration — none of which are published. Detectors do
+//! tokenizer, and sampling configuration - none of which are published. Detectors do
 //! not cross vendors: a Claude/KGW detector says nothing about Gemini/SynthID text
 //! and vice versa.
 

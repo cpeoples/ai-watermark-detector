@@ -1,4 +1,5 @@
 mod c2pa;
+mod signals;
 
 use ai_watermark_detector::{
     parse_token_ids, render, score, Config, OutputFormat, Scheme, RELIABLE_TOKEN_FLOOR,
@@ -38,12 +39,12 @@ enum Commands {
     /// Scores a token-id sequence against a statistical text watermark (kgw, synthid, exp,
     /// unigram, sweet, exp-edit).
     ///
-    /// IMPORTANT: this only gives a real answer when you hold the watermark KEY — i.e. you
+    /// IMPORTANT: this only gives a real answer when you hold the watermark KEY - i.e. you
     /// generated the text yourself, or a vendor published their key. Keyed text watermarks
     /// leave no trace you can read without the exact key, so this CANNOT tell you whether an
     /// arbitrary ChatGPT/Claude/Gemini paragraph is AI-written; there is no key-free method
     /// by cryptographic design. To check a real file (image/video/audio/pdf) for AI
-    /// provenance instead, use `check` — that works today with no key.
+    /// provenance instead, use `check` - that works today with no key.
     Score(ScoreArgs),
     /// Check files, folders, or URLs for C2PA content provenance (images/video/audio/pdf).
     Check(CheckArgs),
@@ -213,7 +214,7 @@ fn run_score(args: ScoreArgs) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(rendered) = render(&out, format, "score")? {
         println!("{rendered}");
     } else {
-        // Plain-English verdict first, details after — so a non-expert gets the answer up top.
+        // Plain-English verdict first, details after - so a non-expert gets the answer up top.
         let verdict = if !result.reliable {
             Verdict::TooShort
         } else if positive {
@@ -239,7 +240,7 @@ fn run_score(args: ScoreArgs) -> Result<(), Box<dyn std::error::Error>> {
                     result.scheme.as_str()
                 );
                 println!(
-                    "the text is human-written — only that THIS scheme+key leaves no trace here."
+                    "the text is human-written - only that THIS scheme+key leaves no trace here."
                 );
             }
             Verdict::TooShort => {
@@ -398,8 +399,36 @@ fn run_check(args: CheckArgs) -> Result<(), Box<dyn std::error::Error>> {
         if r.synthid_assertion {
             println!("  SynthID:         SynthID provenance assertion present (Google marker)");
         }
+        if r.implied_synthid {
+            println!(
+                "  SynthID:         implied by signed issuer (this vendor pairs C2PA with a \
+                 SynthID pixel watermark)"
+            );
+        }
+        if let Some(sb) = &r.soft_binding {
+            println!("  soft-binding:    forensic watermark declared: {sb}");
+        }
+        if r.provenance_conflict {
+            println!(
+                "  conflict:        the signed manifest declares no AI, but an ingredient in \
+                 its chain does"
+            );
+        }
         if !r.assertions.is_empty() {
             println!("  assertions:      {}", r.assertions.join(", "));
+        }
+        for s in &r.signals {
+            let tool = s
+                .tool
+                .as_ref()
+                .map(|t| format!(" [{t}]"))
+                .unwrap_or_default();
+            println!(
+                "  signal:          {} ({}, {}){tool}",
+                s.detail,
+                s.confidence.as_str(),
+                s.source
+            );
         }
         println!("  status:          {}", r.status);
         println!("{}", "-".repeat(74));
@@ -410,9 +439,17 @@ fn run_check(args: CheckArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Per-extension tallies for the `scan` coverage table.
+#[derive(Default)]
+struct ExtStats {
+    total: usize,
+    with_manifest: usize,
+    ai_marked: usize,
+    meta_hint: usize,
+}
+
 fn run_scan(args: ScanArgs) -> Result<(), Box<dyn std::error::Error>> {
     ensure_c2patool();
-
     let files = c2pa::gather_files(&args.files);
     if files.is_empty() {
         eprintln!("error: no files given. Pass files or folders to scan.");
@@ -430,33 +467,40 @@ fn run_scan(args: ScanArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Aggregate per extension: (total, with_manifest, ai_marked).
-    let mut by_ext: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
+    // Aggregate per extension: signed-C2PA AI provenance is counted separately from unsigned
+    // metadata hints, since only the former is cryptographic.
+    let mut by_ext: BTreeMap<String, ExtStats> = BTreeMap::new();
     for r in &reports {
-        let e = by_ext.entry(r.ext.clone()).or_insert((0, 0, 0));
-        e.0 += 1;
+        let stats = by_ext.entry(r.ext.clone()).or_default();
+        stats.total += 1;
         if r.has_manifest {
-            e.1 += 1;
+            stats.with_manifest += 1;
         }
-        if r.ai_source_type.is_some() || r.synthid_assertion {
-            e.2 += 1;
+        let c2pa_ai = r.is_ai_generated();
+        if c2pa_ai {
+            stats.ai_marked += 1;
+        } else if !r.signals.is_empty() {
+            stats.meta_hint += 1;
         }
     }
 
     println!("C2PA format-coverage report");
-    println!("{}", "=".repeat(60));
+    println!("{}", "=".repeat(72));
     println!(
-        "{:<10}{:>7}{:>12}{:>11}",
-        "ext", "files", "w/manifest", "AI-marked"
+        "{:<10}{:>7}{:>12}{:>11}{:>12}",
+        "ext", "files", "w/manifest", "AI-marked", "meta-hint"
     );
-    println!("{}", "-".repeat(60));
-    for (ext, (total, manifest, ai)) in &by_ext {
-        println!("{ext:<10}{total:>7}{manifest:>12}{ai:>11}");
+    println!("{}", "-".repeat(72));
+    for (ext, s) in &by_ext {
+        println!(
+            "{ext:<10}{:>7}{:>12}{:>11}{:>12}",
+            s.total, s.with_manifest, s.ai_marked, s.meta_hint
+        );
     }
-    println!("{}", "-".repeat(60));
-    println!("Formats with 0 w/manifest carry NO checkable provenance in practice");
-    println!("(e.g. .docx/.pptx/.txt/source code) - their only possible trace is the");
-    println!("key-gated statistical text watermark, which needs the vendor's secret key.");
+    println!("{}", "-".repeat(72));
+    println!("AI-marked = signed C2PA AI provenance (HIGH). meta-hint = unsigned metadata/");
+    println!("filename hint only (MEDIUM/LOW, forgeable). Formats with 0 w/manifest carry no");
+    println!("cryptographic provenance; their only signed trace would be a keyed text watermark.");
     Ok(())
 }
 
@@ -468,7 +512,7 @@ fn ensure_c2patool() {
              \x20 any OS:   cargo install c2patool\n\
              \x20 Windows:  cargo install c2patool  (or download c2patool.exe from Releases)\n\
              \x20 releases: https://github.com/contentauth/c2patool/releases\n\
-             (The text-watermark `score` command does NOT need c2patool — only `check`/`scan` do.)"
+             (The text-watermark `score` command does NOT need c2patool - only `check`/`scan` do.)"
         );
         std::process::exit(2);
     }
@@ -493,7 +537,7 @@ fn which_c2patool() -> Option<String> {
 fn plain_c2pa_answer(r: &c2pa::C2paReport) -> String {
     match r.verdict.as_str() {
         "trusted" => {
-            if r.ai_source_type.is_some() || r.synthid_assertion {
+            if r.is_ai_generated() {
                 "AI-generated, and the provenance is cryptographically TRUSTED (signer verified)."
                     .to_string()
             } else {
@@ -501,17 +545,38 @@ fn plain_c2pa_answer(r: &c2pa::C2paReport) -> String {
             }
         }
         "valid-untrusted" => {
-            if r.ai_source_type.is_some() || r.synthid_assertion {
+            if r.is_ai_generated() {
                 "Claims to be AI-generated; signature is valid but signer is NOT on your trust list.".to_string()
             } else {
                 "Has a valid signed record, but the signer is NOT on your trust list.".to_string()
             }
         }
         "tampered" => {
-            "TAMPERED: the file was altered after it was signed — do not trust its provenance."
+            "TAMPERED: the file was altered after it was signed - do not trust its provenance."
                 .to_string()
         }
-        _ => "No provenance record found. This is inconclusive — absence is not proof of anything."
-            .to_string(),
+        _ => match r.signals.first() {
+            Some(s) => {
+                let tool = s
+                    .tool
+                    .as_ref()
+                    .map(|t| format!(" ({t})"))
+                    .unwrap_or_default();
+                let claim = if s.source == "c2pa-text" {
+                    "an embedded C2PA text manifest (signature unverified here)"
+                } else {
+                    "unsigned metadata that suggests AI generation"
+                };
+                format!(
+                    "No verified C2PA record, but {claim}{tool} \
+                     - {} confidence, and this can be forged or stripped.",
+                    s.confidence.as_str()
+                )
+            }
+            None => {
+                "No provenance record found. This is inconclusive - absence is not proof of anything."
+                    .to_string()
+            }
+        },
     }
 }

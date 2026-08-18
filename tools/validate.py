@@ -8,13 +8,13 @@ watermark implementations shipped in Hugging Face `transformers`:
   * KGW greenlist -> `WatermarkLogitsProcessor` + `WatermarkDetector` (Kirchenbauer et al.)
 
 and checks that OUR Rust detector reproduces them. Because YOU choose the key, you are
-the key-holder and detection is authoritative — this is genuine ground truth.
+the key-holder and detection is authoritative - this is genuine ground truth.
 
 Why "the key" is unavoidable: KGW/SynthID are *keyed statistical* watermarks. The mark is
 not embedded in the text; it is a faint statistical bias created with a secret key. To
 measure it you must reproduce the same keyed split, which needs the key. With your own key
 here, detection is exact; against a vendor's production output (secret key) it is impossible
-by cryptographic design. (Signed file provenance / C2PA is different — check it with the
+by cryptographic design. (Signed file provenance / C2PA is different - check it with the
 Rust CLI's `check`/`scan` subcommands.)
 
 What it validates

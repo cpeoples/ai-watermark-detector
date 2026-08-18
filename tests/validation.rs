@@ -5,7 +5,7 @@
 //! implementations. These tests do NOT check against real Claude/Gemini output (impossible
 //! without the vendors' private keys/tokenizers). Instead each uses a *known* watermark key
 //! to generate a watermarked stream and an unwatermarked control, then asserts the detector
-//! reports a strong signal on the former and noise on the latter — across every scheme
+//! reports a strong signal on the former and noise on the latter - across every scheme
 //! (SynthID, KGW, exp, unigram, SWEET, exp-edit) plus the grounded p-value special
 //! functions. If any of these fail, the core g-value/statistic machinery is broken.
 

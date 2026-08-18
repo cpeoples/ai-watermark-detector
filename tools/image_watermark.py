@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Image watermark detection: Stable Signature (Meta) + Tree-Ring + SynthID-Image surrogate.
 
-This extends the repo beyond TEXT watermarks and C2PA metadata into the PIXEL domain — the
+This extends the repo beyond TEXT watermarks and C2PA metadata into the PIXEL domain - the
 invisible image watermarks that diffusion models embed. Read the honesty labels carefully;
 they are the whole point.
 
@@ -17,10 +17,10 @@ Schemes
     that we validated to ~1e-31 against scipy. If you know the signing key, this is a real
     forensic verdict on real pixels. The extractor is downloaded from Meta's public bucket.
 
-* tree-ring         [NOT shippable as a standalone check — documented, not implemented]
+* tree-ring         [NOT shippable as a standalone check - documented, not implemented]
     Tree-Ring (NeurIPS 2023) injects a ring pattern into the Fourier transform of the INITIAL
     NOISE latent. Detection REQUIRES DDIM-inverting the exact diffusion model to recover that
-    latent — there is no standalone image decoder — so it cannot be a faithful check on a bare
+    latent - there is no standalone image decoder - so it cannot be a faithful check on a bare
     file. We deliberately do NOT ship a fake version; the honest FFT-domain hint you can run on
     a raw image is the `synthid-image` surrogate below (also labeled non-forensic).
 
@@ -153,7 +153,7 @@ def run_stable_signature(args):
 
 
 def format_ss(r):
-    lines = ["Stable Signature (Meta) — pixel-domain bit extraction",
+    lines = ["Stable Signature (Meta) - pixel-domain bit extraction",
              "=" * 60,
              f"image:            {r['image']}",
              f"extracted 48 bits: {r['extracted_bits']}"]
@@ -167,7 +167,7 @@ def format_ss(r):
         ]
         lines.append("")
         lines.append("FORENSIC when you hold the key: the p-value is the exact Binomial(48,0.5)")
-        lines.append("false-positive rate — the same betainc test the Rust CLI validated to 1e-31.")
+        lines.append("false-positive rate - the same betainc test the Rust CLI validated to 1e-31.")
     else:
         lines.append(r.get("note", ""))
     return "\n".join(lines)
@@ -281,13 +281,13 @@ def run_synthid_image(args):
         "scheme": "synthid-image",
         "image": args.image,
         "hf_energy_ratio": ratio,
-        "verdict": "HEURISTIC ONLY — not a decoder, not forensic",
+        "verdict": "HEURISTIC ONLY - not a decoder, not forensic",
         "disclaimer": ("SynthID-Image has NO public decoder. This spectral surrogate "
                        "(reverse-SynthID style) reaches ~90% only on controlled references and "
                        "does NOT reliably separate real content. Treat as a weak hint, never proof."),
     }
     print(json.dumps(result, indent=2) if args.json else
-          f"SynthID-Image surrogate [HEURISTIC — NOT FORENSIC]\n"
+          f"SynthID-Image surrogate [HEURISTIC - NOT FORENSIC]\n"
           f"  image: {result['image']}\n"
           f"  high-freq energy ratio: {ratio:.4f}\n"
           f"  {result['disclaimer']}")

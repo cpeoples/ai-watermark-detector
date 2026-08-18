@@ -18,7 +18,7 @@ test: ## Run the Rust test suite
 
 lint: ## Lint Rust (clippy) if available
 	@$(CARGO) clippy --all-targets -- -D warnings 2>/dev/null || \
-		echo "clippy not installed (rustup component add clippy) — skipping"
+		echo "clippy not installed (rustup component add clippy) - skipping"
 
 fmt: ## Format Rust sources
 	$(CARGO) fmt

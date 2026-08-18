@@ -6,13 +6,17 @@
 //! binary from the Content Authenticity Initiative), parses its JSON, and surfaces:
 //!   * whether a manifest is present + signature validation status,
 //!   * the claim generator (tool/vendor),
-//!   * AI-generation markers: the IPTC `digitalSourceType` and any SynthID assertion
-//!     (Google's marker on Gemini/Imagen images & Veo video).
+//!   * AI-generation markers: the IPTC `digitalSourceType`, any SynthID assertion, the
+//!     forensic `soft-binding` watermark, and a SynthID implied by a SynthID-pairing issuer.
+//!     Markers are collected across the whole manifest chain, since AI provenance often lives
+//!     on a parent/ingredient rather than the active manifest; a mismatch (clean active over an
+//!     AI ingredient) is reported as a provenance conflict.
 //!
 //! C2PA is container-agnostic: images (JPEG/PNG/WebP/AVIF/…), video (MP4/MOV), audio
-//! (MP3/WAV/M4A), and PDF. Text/code containers (.docx/.txt/source) carry no manifest in
-//! practice — this module reports that honestly.
+//! (MP3/WAV/M4A), and PDF. `c2patool` handles those binary containers; C2PA 2.4 text
+//! embeddings (in `.txt`/source/HTML) are detected separately in `signals.rs`.
 
+use crate::signals::{self, Signal};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
@@ -29,7 +33,7 @@ pub fn ai_source_meaning(code: &str) -> Option<&'static str> {
 }
 
 /// Real, publicly-hosted C2PA-signed sample files from the official Content Authenticity
-/// project test fixtures, spanning image / video / audio formats.
+/// project test fixtures, spanning image / video / audio / PDF formats.
 pub const SAMPLE_URLS: &[(&str, &str)] = &[
     ("cai_image_C.jpg", "https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/C.jpg"),
     ("cai_image_cloud.jpg", "https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/cloud.jpg"),
@@ -42,6 +46,7 @@ pub const SAMPLE_URLS: &[(&str, &str)] = &[
     // Official C2PA public test corpus (Adobe-signed provenance chains).
     ("adobe_signed_C.jpg", "https://raw.githubusercontent.com/c2pa-org/public-testfiles/main/legacy/1.4/image/jpeg/adobe-20220124-C.jpg"),
     ("adobe_signed_CA.jpg", "https://raw.githubusercontent.com/c2pa-org/public-testfiles/main/legacy/1.4/image/jpeg/adobe-20220124-CA.jpg"),
+    ("adobe_signed.pdf", "https://raw.githubusercontent.com/c2pa-org/public-testfiles/main/legacy/1.4/pdf/adobe-20240110-single_manifest_store.pdf"),
 ];
 
 /// Result of inspecting a single file.
@@ -60,8 +65,29 @@ pub struct C2paReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai_source_type: Option<String>,
     pub synthid_assertion: bool,
+    /// Forensic soft-binding watermark named in the manifest (e.g. `com.adobe.trustmark.Q`,
+    /// Digimarc, Imatag). Present only when the signed manifest declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_binding: Option<String>,
+    /// A validly signed manifest from a vendor that always pairs C2PA with a SynthID pixel
+    /// watermark (Google, OpenAI), so the watermark is implied even without a SynthID assertion.
+    pub implied_synthid: bool,
+    /// The active (current signer's) manifest declares no AI generation, yet an ingredient/
+    /// parent in the signed chain does - a provenance conflict worth surfacing (the "Integrity
+    /// Clash": a valid signature can assert a human-only edit over an AI-generated original).
+    pub provenance_conflict: bool,
     pub assertions: Vec<String>,
     pub validation_codes: Vec<String>,
+    /// Lower-confidence AI-generation hints from unsigned metadata / filename (never override
+    /// the C2PA `verdict`; empty when none are found or the bytes can't be read).
+    pub signals: Vec<Signal>,
+}
+
+impl C2paReport {
+    /// True when the signed manifest establishes AI generation, by any of its markers.
+    pub fn is_ai_generated(&self) -> bool {
+        self.ai_source_type.is_some() || self.synthid_assertion || self.implied_synthid
+    }
 }
 
 /// Validation codes that indicate the content or manifest was altered after signing.
@@ -121,33 +147,95 @@ fn collect_dst(v: &Value, out: &mut Vec<String>) {
     }
 }
 
-fn find_ai_markers(active: &Value) -> (Option<String>, bool) {
-    let mut ai_source = None;
-    let mut synthid = false;
-    if let Some(assertions) = active.get("assertions").and_then(|a| a.as_array()) {
-        for a in assertions {
-            let label = a
-                .get("label")
-                .and_then(|l| l.as_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let blob = a.to_string().to_ascii_lowercase();
-            if label.contains("synthid") || blob.contains("synthid") {
-                synthid = true;
-            }
-            let mut dsts = Vec::new();
-            if let Some(data) = a.get("data") {
-                collect_dst(data, &mut dsts);
-            }
-            for dst in dsts {
-                let code = dst.rsplit('/').next().unwrap_or(&dst);
-                if let Some(meaning) = ai_source_meaning(code) {
-                    ai_source = Some(meaning.to_string());
-                }
+/// AI-generation markers extracted from a signed manifest's assertions.
+#[derive(Default)]
+struct AiMarkers {
+    source_type: Option<String>,
+    synthid_assertion: bool,
+    soft_binding: Option<String>,
+}
+
+impl AiMarkers {
+    /// Fold another manifest's markers in, keeping any value already found (the active
+    /// manifest is scanned first, so its values win).
+    fn merge(&mut self, other: AiMarkers) {
+        self.synthid_assertion |= other.synthid_assertion;
+        self.source_type = self.source_type.take().or(other.source_type);
+        self.soft_binding = self.soft_binding.take().or(other.soft_binding);
+    }
+
+    /// Whether this manifest declares AI generation (source type or SynthID assertion).
+    fn is_ai(&self) -> bool {
+        self.source_type.is_some() || self.synthid_assertion
+    }
+}
+
+fn find_ai_markers(active: &Value) -> AiMarkers {
+    let mut markers = AiMarkers::default();
+    let Some(assertions) = active.get("assertions").and_then(|a| a.as_array()) else {
+        return markers;
+    };
+    for a in assertions {
+        let label = a
+            .get("label")
+            .and_then(|l| l.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let blob = a.to_string().to_ascii_lowercase();
+        if label.contains("synthid") || blob.contains("synthid") {
+            markers.synthid_assertion = true;
+        }
+        if label.contains("soft-binding") {
+            markers.soft_binding = a
+                .get("data")
+                .and_then(|d| d.get("alg"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some("soft-binding watermark".to_string()));
+        }
+        let mut dsts = Vec::new();
+        if let Some(data) = a.get("data") {
+            collect_dst(data, &mut dsts);
+        }
+        for dst in dsts {
+            let code = dst.rsplit('/').next().unwrap_or(&dst);
+            if let Some(meaning) = ai_source_meaning(code) {
+                markers.source_type = Some(meaning.to_string());
             }
         }
     }
-    (ai_source, synthid)
+    markers
+}
+
+/// Collect AI markers across the whole signed manifest store, not just the active manifest.
+/// AI provenance often lives on a parent/ingredient manifest (e.g. an editor re-signs an
+/// AI-generated original), so the active manifest alone can miss it. The active manifest is
+/// scanned first so its values take precedence.
+fn find_ai_markers_in_store(store: &Value, active: &Value) -> AiMarkers {
+    let mut markers = find_ai_markers(active);
+    if let Some(manifests) = store.get("manifests").and_then(|m| m.as_object()) {
+        for manifest in manifests.values() {
+            if manifest == active {
+                continue;
+            }
+            markers.merge(find_ai_markers(manifest));
+        }
+    }
+    markers
+}
+
+/// Vendors whose validly signed C2PA manifests always carry a SynthID pixel watermark, so a
+/// good signature from one implies the invisible watermark even absent a SynthID assertion.
+fn issuer_implies_synthid(claim_generator: Option<&str>) -> bool {
+    let Some(gen) = claim_generator else {
+        return false;
+    };
+    let gen = gen.to_ascii_lowercase();
+    [
+        "google", "imagen", "gemini", "deepmind", "openai", "dall", "gpt",
+    ]
+    .iter()
+    .any(|v| gen.contains(v))
 }
 
 /// Run `c2patool <path>` (optionally with a trust anchor list) and summarize the result.
@@ -163,9 +251,19 @@ pub fn check_file(path: &str, trust_anchors: Option<&str>) -> C2paReport {
         title: None,
         ai_source_type: None,
         synthid_assertion: false,
+        soft_binding: None,
+        implied_synthid: false,
+        provenance_conflict: false,
         assertions: Vec::new(),
         validation_codes: Vec::new(),
+        signals: Vec::new(),
     };
+
+    // Metadata/filename signals are independent of c2patool and worth surfacing even when the
+    // C2PA path errors or finds nothing, so gather them up front from the raw bytes.
+    if let Ok(bytes) = std::fs::read(path) {
+        report.signals = signals::scan(path, &report.ext, &bytes);
+    }
 
     let mut cmd = Command::new("c2patool");
     cmd.arg(path);
@@ -252,9 +350,13 @@ pub fn check_file(path: &str, trust_anchors: Option<&str>) -> C2paReport {
             .collect();
     }
 
-    let (ai_source, synthid) = find_ai_markers(&active);
-    report.ai_source_type = ai_source;
-    report.synthid_assertion = synthid;
+    let active_markers = find_ai_markers(&active);
+    let active_is_ai = active_markers.is_ai();
+    let markers = find_ai_markers_in_store(&store, &active);
+    report.provenance_conflict = markers.is_ai() && !active_is_ai;
+    report.ai_source_type = markers.source_type;
+    report.synthid_assertion = markers.synthid_assertion;
+    report.soft_binding = markers.soft_binding;
 
     let vs = store
         .get("validation_status")
@@ -271,6 +373,16 @@ pub fn check_file(path: &str, trust_anchors: Option<&str>) -> C2paReport {
         .collect();
 
     report.verdict = classify(report.has_manifest, &report.validation_codes);
+    // A SynthID pixel watermark is implied only when the manifest is a genuinely valid
+    // signature (tampered/error manifests prove nothing) from a SynthID-pairing issuer, and no
+    // explicit SynthID assertion already established it.
+    let validly_signed = matches!(
+        report.verdict.as_str(),
+        "trusted" | "valid-untrusted" | "valid-with-warnings"
+    );
+    report.implied_synthid = validly_signed
+        && !report.synthid_assertion
+        && issuer_implies_synthid(report.claim_generator.as_deref());
     report.status = match report.verdict.as_str() {
         "trusted" => {
             "manifest present; signature TRUSTED (chains to a provided anchor)".to_string()
@@ -382,5 +494,108 @@ fn walk(dir: &Path, out: &mut Vec<String>) {
                 out.push(s.to_string());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn soft_binding_alg_is_extracted() {
+        let manifest = json!({
+            "assertions": [
+                {"label": "c2pa.soft-binding", "data": {"alg": "com.adobe.trustmark.Q"}}
+            ]
+        });
+        let markers = find_ai_markers(&manifest);
+        assert_eq!(
+            markers.soft_binding.as_deref(),
+            Some("com.adobe.trustmark.Q")
+        );
+    }
+
+    #[test]
+    fn synthid_assertion_is_detected() {
+        let manifest = json!({ "assertions": [{"label": "com.google.synthid"}] });
+        assert!(find_ai_markers(&manifest).synthid_assertion);
+    }
+
+    #[test]
+    fn ai_marker_on_ingredient_manifest_is_found() {
+        // Active manifest is a plain edit; the AI marker lives on the parent/ingredient.
+        let store = json!({
+            "active_manifest": "edit",
+            "manifests": {
+                "edit": {"assertions": [{"label": "c2pa.actions"}]},
+                "original": {"assertions": [{
+                    "label": "c2pa.actions",
+                    "data": {"digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"}
+                }]}
+            }
+        });
+        let active = store["manifests"]["edit"].clone();
+        let markers = find_ai_markers_in_store(&store, &active);
+        assert!(
+            markers.source_type.is_some(),
+            "AI marker on an ingredient manifest must be found"
+        );
+    }
+
+    #[test]
+    fn provenance_conflict_when_active_clean_but_ingredient_ai() {
+        let active_ai = json!({"assertions": [{
+            "label": "c2pa.actions",
+            "data": {"digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"}
+        }]});
+        let active_clean = json!({"assertions": [{"label": "c2pa.actions"}]});
+        let store_markers = |active: &Value, ingredient_ai: bool| {
+            let store = json!({
+                "active_manifest": "a",
+                "manifests": {
+                    "a": active.clone(),
+                    "b": if ingredient_ai { active_ai.clone() } else { active_clean.clone() }
+                }
+            });
+            let m = find_ai_markers_in_store(&store, active);
+            m.is_ai() && !find_ai_markers(active).is_ai()
+        };
+        // Clean active + AI ingredient => conflict; AI active => no conflict; all clean => none.
+        assert!(store_markers(&active_clean, true));
+        assert!(!store_markers(&active_ai, true));
+        assert!(!store_markers(&active_clean, false));
+    }
+
+    #[test]
+    fn issuer_synthid_inference() {
+        assert!(issuer_implies_synthid(Some("Made by Google Gemini")));
+        assert!(issuer_implies_synthid(Some("OpenAI DALL-E 3")));
+        assert!(!issuer_implies_synthid(Some("Adobe Firefly")));
+        assert!(!issuer_implies_synthid(None));
+    }
+
+    #[test]
+    fn is_ai_generated_covers_every_marker() {
+        let mut r = C2paReport {
+            file: String::new(),
+            ext: String::new(),
+            has_manifest: true,
+            status: String::new(),
+            verdict: "trusted".to_string(),
+            claim_generator: None,
+            title: None,
+            ai_source_type: None,
+            synthid_assertion: false,
+            soft_binding: None,
+            implied_synthid: false,
+            provenance_conflict: false,
+            assertions: Vec::new(),
+            validation_codes: Vec::new(),
+            signals: Vec::new(),
+        };
+        assert!(!r.is_ai_generated());
+        r.implied_synthid = true;
+        assert!(r.is_ai_generated());
     }
 }

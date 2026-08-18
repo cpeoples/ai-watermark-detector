@@ -7,10 +7,10 @@ KGW and SynthID are *keyed statistical* watermarks. There is no visible mark emb
 the text. Instead, at each token the generator used a SECRET number ("the key") to split
 the vocabulary into "preferred" and "not preferred" and leaned slightly toward preferred
 tokens. The only trace is a faint statistical bias. To *measure* that bias a detector must
-reproduce the exact same secret split — which requires the key. Without the key there is
+reproduce the exact same secret split - which requires the key. Without the key there is
 literally no signal to read; watermarked text is statistically identical to unwatermarked
 text. This is a cryptographic design property, not a limitation we can engineer around.
-(Contrast: C2PA file provenance is a SIGNED record you can verify with a PUBLIC key — use
+(Contrast: C2PA file provenance is a SIGNED record you can verify with a PUBLIC key - use
 the Rust CLI's `check`/`scan` subcommands. Different mechanism entirely.)
 
 Two consequences for this bridge:
@@ -18,7 +18,7 @@ Two consequences for this bridge:
   * A detector also needs the EXACT tokenizer used at generation, because the watermark
     lives in token-ID space. There is no universally "correct" tokenizer for arbitrary text.
   * For a CONTROLLED experiment (you generated the text with a known model/key/tokenizer),
-    pass that tokenizer here and the resulting IDs are exactly right — detection is then
+    pass that tokenizer here and the resulting IDs are exactly right - detection is then
     authoritative (see tools/validate.py).
   * For arbitrary/real vendor text, any tokenizer choice here is an APPROXIMATION and,
     lacking the vendor's private key, cannot be an authoritative verifier. The detector
