@@ -1,4 +1,5 @@
 mod c2pa;
+mod commits;
 mod signals;
 
 use ai_watermark_detector::{
@@ -25,7 +26,7 @@ fn resolve_format(format: &str, json: bool) -> OutputFormat {
 #[command(
     author,
     version,
-    about = "Statistical text-watermark scorer + C2PA file-provenance checker"
+    about = "Statistical text-watermark scorer, C2PA file-provenance checker, and git AI-commit scanner"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -50,6 +51,8 @@ enum Commands {
     Check(CheckArgs),
     /// Scan files/folders and report per-format C2PA manifest coverage.
     Scan(ScanArgs),
+    /// Scan a git repo's history for AI coding-agent provenance (Copilot, Cursor, Devin, ...).
+    Commits(CommitsArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -128,12 +131,36 @@ struct ScanArgs {
     json: bool,
 }
 
+#[derive(Parser, Debug)]
+struct CommitsArgs {
+    /// Path to the git repository (defaults to the current directory).
+    #[arg(default_value = ".")]
+    repo: String,
+
+    /// How many commits back to inspect.
+    #[arg(long, default_value_t = 200)]
+    limit: usize,
+
+    /// Show every commit, not just the AI-authored ones.
+    #[arg(long)]
+    all: bool,
+
+    /// Output format: text (default), json, xml, or yaml.
+    #[arg(long, default_value = "text")]
+    format: String,
+
+    /// Legacy shortcut for `--format json`.
+    #[arg(long, hide = true)]
+    json: bool,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Score(args) => run_score(args),
         Commands::Check(args) => run_check(args),
         Commands::Scan(args) => run_scan(args),
+        Commands::Commits(args) => run_commits(args),
     }
 }
 
@@ -316,6 +343,15 @@ struct ScoreOutput {
 #[derive(Serialize)]
 struct ReportsOutput<'a> {
     results: &'a [c2pa::C2paReport],
+}
+
+/// Machine-readable wrapper for `commits`: the summary plus per-commit records.
+#[derive(Serialize)]
+struct CommitsOutput<'a> {
+    repo: &'a str,
+    scanned: usize,
+    ai_authored: usize,
+    commits: &'a [commits::CommitReport],
 }
 
 /// Plain-English verdict shown at the top of a `score` run.
@@ -584,4 +620,42 @@ fn plain_c2pa_answer(r: &c2pa::C2paReport) -> String {
             }
         },
     }
+}
+
+fn run_commits(args: CommitsArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let reports = commits::scan_repo(&args.repo, args.limit).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    });
+    let ai_authored = reports.iter().filter(|c| c.ai_authored).count();
+
+    let format = resolve_format(&args.format, args.json);
+    let out = CommitsOutput {
+        repo: &args.repo,
+        scanned: reports.len(),
+        ai_authored,
+        commits: &reports,
+    };
+    if let Some(rendered) = render(&out, format, "commits")? {
+        println!("{rendered}");
+        return Ok(());
+    }
+
+    println!("AI coding-agent provenance in {}", args.repo);
+    println!("{}", "=".repeat(74));
+    println!(
+        "{} of {} recent commits are AI-authored (self-declared markers).",
+        ai_authored,
+        reports.len()
+    );
+    println!("{}", "-".repeat(74));
+    for c in reports.iter().filter(|c| args.all || c.ai_authored) {
+        let short = c.hash.get(..8).unwrap_or(&c.hash);
+        let label = c.tool.as_deref().unwrap_or("human");
+        println!("{short}  [{label}]  {}", c.subject);
+    }
+    if ai_authored == 0 {
+        println!("(No AI-agent markers found. Absence is not proof of human authorship.)");
+    }
+    Ok(())
 }
